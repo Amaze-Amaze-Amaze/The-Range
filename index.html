@@ -1,0 +1,532 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Target Range</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #111;
+    font-family: Arial, sans-serif;
+    color: white;
+  }
+  #hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .panel {
+    background: rgba(10,15,20,.78);
+    padding: 14px 18px;
+    border: 1px solid #58636c;
+    border-radius: 8px;
+  }
+  #stats { position: absolute; top: 18px; left: 18px; }
+  #help { position: absolute; bottom: 18px; left: 18px; }
+  #message {
+    position: absolute;
+    top: 22%;
+    width: 100%;
+    text-align: center;
+    font-size: 26px;
+    font-weight: bold;
+    color: #ffe27a;
+    text-shadow: 0 2px 6px black;
+  }
+  #crosshair {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%,-50%);
+    width: 22px; height: 22px;
+  }
+  #crosshair:before, #crosshair:after {
+    content: "";
+    position: absolute;
+    background: #fff;
+    box-shadow: 0 0 3px #000;
+  }
+  #crosshair:before {
+    width: 2px; height: 22px; left: 10px;
+  }
+  #crosshair:after {
+    height: 2px; width: 22px; top: 10px;
+  }
+  #startScreen {
+    position: absolute;
+    inset: 0;
+    background: rgba(5,10,15,.88);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 20px;
+    z-index: 5;
+  }
+  h1 { font-size: clamp(32px, 6vw, 60px); margin: 0 0 12px; }
+  #startScreen p { line-height: 1.7; color: #ccd4dd; }
+  button {
+    border: 0;
+    border-radius: 7px;
+    background: #f2c14e;
+    color: #171717;
+    padding: 15px 30px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  button:hover { background: #ffda73; }
+  #hitmarker {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%,-50%);
+    font-size: 42px;
+    color: #ffe27a;
+    opacity: 0;
+  }
+  .small { font-size: 13px; color: #c4ccd4; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div id="stats" class="panel">
+    <b>🎯 TARGET RANGE</b><br><br>
+    Score: <span id="score">0</span><br>
+    Targets hit: <span id="hits">0</span><br>
+    Accuracy: <span id="accuracy">0%</span><br>
+    Time: <span id="time">60</span>s
+  </div>
+
+  <div id="message">READY</div>
+  <div id="crosshair"></div>
+  <div id="hitmarker">×</div>
+
+  <div id="help" class="panel">
+    <b>CONTROLS</b><br>
+    Mouse: Look around<br>
+    Left click: Hit target<br>
+    W / S: Move forward / backward<br>
+    A / D: Move left / right<br>
+    ESC: Release mouse<br>
+    <span class="small">Hit the circular targets to score points.</span>
+  </div>
+</div>
+
+<div id="startScreen">
+  <h1>3D TARGET RANGE</h1>
+  <p>
+    Enter the range and test your aim.<br>
+    Hit the targets before time runs out.<br><br>
+    <b>Mouse</b> to look around · <b>Click</b> to shoot ·
+    <b>WASD</b> to move
+  </p>
+  <button id="startButton">START GAME</button>
+  <p class="small">60-second challenge · Best played on desktop</p>
+</div>
+
+<script type="module">
+import * as THREE from
+  'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x91b9d2);
+scene.fog = new THREE.Fog(0x91b9d2, 35, 115);
+
+const camera = new THREE.PerspectiveCamera(
+  75, innerWidth / innerHeight, 0.1, 200
+);
+camera.position.set(0, 1.7, 8);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xdceeff, 0x59634c, 2));
+
+const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+sun.position.set(-15, 30, 15);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+// Materials
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x777b6d, roughness: 1
+});
+const concreteMat = new THREE.MeshStandardMaterial({
+  color: 0x777d82, roughness: .9
+});
+const woodMat = new THREE.MeshStandardMaterial({
+  color: 0x795b3b, roughness: .9
+});
+const darkMat = new THREE.MeshStandardMaterial({
+  color: 0x333c42, roughness: .85
+});
+
+// Helper for boxes
+function box(w, h, d, material, x, y, z) {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d), material
+  );
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+// Floor
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(180, 180), groundMat
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = 0;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Shooting lanes
+for (let x = -12; x <= 12; x += 6) {
+  box(.12, .025, 60, new THREE.MeshStandardMaterial({
+    color: 0xe1d6a2
+  }), x, .02, -22);
+}
+
+// Side barriers and back wall
+box(1, 2.2, 65, concreteMat, -16, 1.1, -20);
+box(1, 2.2, 65, concreteMat, 16, 1.1, -20);
+box(33, 5, 1.2, concreteMat, 0, 2.5, -53);
+
+// Overhead roof beams
+for (let z = 7; z > -48; z -= 12) {
+  box(32, .25, .4, darkMat, 0, 5, z);
+}
+box(32, .3, 4, darkMat, 0, 5.2, 5);
+
+// Wooden target stands
+const targets = [];
+const raycaster = new THREE.Raycaster();
+const center = new THREE.Vector2(0, 0);
+
+const targetColors = [
+  0xe84a4a, 0xf0c84a, 0x48b9e9,
+  0xf0f0e8, 0xe84a4a
+];
+
+function createTarget(x, y, z, size, color, points) {
+  const group = new THREE.Group();
+  group.position.set(x, y, z);
+  scene.add(group);
+
+  // Stand behind target
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(.13, 1.8, .15), woodMat
+  );
+  post.position.y = -.7;
+  post.castShadow = true;
+  group.add(post);
+
+  // Target board facing the player
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(size * 1.15, size * 1.15, .12),
+    woodMat
+  );
+  board.position.z = -.02;
+  group.add(board);
+
+  const rings = [
+    { r: .50, c: 0xf1eee2 },
+    { r: .39, c: 0x2788cc },
+    { r: .28, c: 0xe54843 },
+    { r: .16, c: 0xf1eee2 },
+    { r: .075, c: 0xe54843 }
+  ];
+
+  for (const ring of rings) {
+    const disk = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        size * ring.r, size * ring.r, .045, 32
+      ),
+      new THREE.MeshStandardMaterial({
+        color: ring.c, roughness: .7
+      })
+    );
+    disk.rotation.x = Math.PI / 2;
+    disk.position.z = .105;
+    disk.castShadow = true;
+    group.add(disk);
+  }
+
+  group.traverse(obj => {
+    if (obj.isMesh) {
+      obj.userData.target = group;
+    }
+  });
+
+  group.userData = {
+    points, active: true, size,
+    home: new THREE.Vector3(x, y, z),
+    phase: Math.random() * 6.28,
+    speed: .5 + Math.random() * .8,
+    moving: z < -20
+  };
+
+  targets.push(group);
+}
+
+// Targets at different distances and heights
+createTarget(-7, 2.4, -13, 2.2, targetColors[0], 10);
+createTarget(0, 2.3, -15, 2.0, targetColors[1], 10);
+createTarget(7, 2.5, -18, 1.8, targetColors[2], 15);
+createTarget(-4, 3.1, -26, 1.7, targetColors[3], 15);
+createTarget(4, 2.6, -29, 1.5, targetColors[4], 20);
+createTarget(0, 3.3, -37, 1.35, targetColors[0], 25);
+createTarget(-9, 2.7, -34, 1.4, targetColors[1], 20);
+createTarget(9, 3.2, -39, 1.3, targetColors[2], 25);
+createTarget(-5, 3.5, -44, 1.2, targetColors[3], 30);
+createTarget(5, 3.4, -46, 1.2, targetColors[4], 30);
+
+// Background scenery
+const mountainMat = new THREE.MeshStandardMaterial({
+  color: 0x849783, roughness: 1
+});
+for (let i = 0; i < 18; i++) {
+  const height = 7 + Math.random() * 13;
+  const hill = new THREE.Mesh(
+    new THREE.ConeGeometry(7 + Math.random() * 6, height, 5),
+    mountainMat
+  );
+  hill.position.set(
+    -75 + i * 9,
+    height / 2 - 1,
+    -75 - Math.random() * 12
+  );
+  scene.add(hill);
+}
+
+// Player controls
+let yaw = 0;
+let pitch = 0;
+let playing = false;
+let score = 0;
+let hits = 0;
+let shots = 0;
+let remaining = 60;
+let lastTime = performance.now();
+const keys = {};
+const clock = new THREE.Clock();
+
+const scoreEl = document.getElementById('score');
+const hitsEl = document.getElementById('hits');
+const accuracyEl = document.getElementById('accuracy');
+const timeEl = document.getElementById('time');
+const messageEl = document.getElementById('message');
+const startScreen = document.getElementById('startScreen');
+const hitmarker = document.getElementById('hitmarker');
+
+function updateHUD() {
+  scoreEl.textContent = score;
+  hitsEl.textContent = hits;
+  accuracyEl.textContent =
+    (shots ? Math.round(hits / shots * 100) : 0) + '%';
+  timeEl.textContent = Math.ceil(remaining);
+}
+
+function startGame() {
+  score = 0;
+  hits = 0;
+  shots = 0;
+  remaining = 60;
+  yaw = 0;
+  pitch = 0;
+  camera.position.set(0, 1.7, 8);
+  targets.forEach(t => {
+    t.visible = true;
+    t.userData.active = true;
+    t.position.copy(t.userData.home);
+  });
+  playing = true;
+  messageEl.textContent = 'GO!';
+  startScreen.style.display = 'none';
+  updateHUD();
+  renderer.domElement.requestPointerLock();
+}
+
+document.getElementById('startButton')
+  .addEventListener('click', startGame);
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== renderer.domElement && playing) {
+    messageEl.textContent = 'PAUSED — CLICK TO RESUME';
+  }
+});
+
+document.addEventListener('mousemove', e => {
+  if (!playing || document.pointerLockElement !== renderer.domElement)
+    return;
+  yaw -= e.movementX * .0022;
+  pitch -= e.movementY * .0022;
+  pitch = THREE.MathUtils.clamp(pitch, -1.15, 1.15);
+});
+
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Escape' && playing) {
+    messageEl.textContent = 'PAUSED';
+  }
+});
+
+document.addEventListener('keyup', e => {
+  keys[e.code] = false;
+});
+
+renderer.domElement.addEventListener('click', () => {
+  if (!playing) return;
+  if (document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock();
+    return;
+  }
+
+  shots++;
+  camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  raycaster.setFromCamera(center, camera);
+
+  const activeMeshes = [];
+  targets.forEach(t => {
+    if (t.visible && t.userData.active) {
+      t.traverse(obj => {
+        if (obj.isMesh) activeMeshes.push(obj);
+      });
+    }
+  });
+
+  const intersections = raycaster.intersectObjects(activeMeshes, false);
+  let hitTarget = null;
+
+  for (const hit of intersections) {
+    const target = hit.object.userData.target;
+    if (target && target.userData.active) {
+      hitTarget = target;
+      break;
+    }
+  }
+
+  if (hitTarget) {
+    hits++;
+    score += hitTarget.userData.points;
+    hitTarget.userData.active = false;
+    hitTarget.visible = false;
+    messageEl.textContent = '+' + hitTarget.userData.points + ' POINTS!';
+    hitmarker.style.opacity = 1;
+    setTimeout(() => hitmarker.style.opacity = 0, 160);
+
+    // Respawn the target after a short delay
+    setTimeout(() => {
+      if (playing) {
+        hitTarget.userData.active = true;
+        hitTarget.visible = true;
+        hitTarget.position.copy(hitTarget.userData.home);
+      }
+    }, 1600);
+  } else {
+    messageEl.textContent = 'MISS!';
+  }
+
+  updateHUD();
+});
+
+function finishGame() {
+  playing = false;
+  document.exitPointerLock();
+  messageEl.textContent = 'TIME UP!';
+  startScreen.style.display = 'flex';
+  startScreen.innerHTML = `
+    <h1>RANGE COMPLETE</h1>
+    <p>
+      Final score: <b>${score}</b><br>
+      Targets hit: <b>${hits}</b><br>
+      Shots fired: <b>${shots}</b><br>
+      Accuracy: <b>${shots ? Math.round(hits/shots*100) : 0}%</b>
+    </p>
+    <button id="restartButton">PLAY AGAIN</button>
+  `;
+  document.getElementById('restartButton')
+    .addEventListener('click', startGame);
+}
+
+// Animation loop
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), .05);
+
+  if (playing) {
+    if (document.pointerLockElement === renderer.domElement) {
+      remaining -= dt;
+      if (remaining <= 0) {
+        remaining = 0;
+        updateHUD();
+        finishGame();
+      } else {
+        // Movement relative to viewing direction
+        const forward = new THREE.Vector3(
+          -Math.sin(yaw), 0, -Math.cos(yaw)
+        );
+        const right = new THREE.Vector3(
+          Math.cos(yaw), 0, -Math.sin(yaw)
+        );
+
+        const movement = new THREE.Vector3();
+        if (keys.KeyW || keys.ArrowUp) movement.add(forward);
+        if (keys.KeyS || keys.ArrowDown) movement.sub(forward);
+        if (keys.KeyD || keys.ArrowRight) movement.add(right);
+        if (keys.KeyA || keys.ArrowLeft) movement.sub(right);
+
+        if (movement.lengthSq() > 0) {
+          movement.normalize().multiplyScalar(7 * dt);
+          camera.position.add(movement);
+        }
+
+        camera.position.x = THREE.MathUtils.clamp(
+          camera.position.x, -14, 14
+        );
+        camera.position.z = THREE.MathUtils.clamp(
+          camera.position.z, -3, 12
+        );
+
+        targets.forEach(t => {
+          if (t.userData.active && t.userData.moving) {
+            t.position.x = t.userData.home.x +
+              Math.sin(now * .001 * t.userData.speed +
+              t.userData.phase) * 1.5;
+          }
+        });
+
+        camera.rotation.order = 'YXZ';
+        camera.rotation.set(pitch, yaw, 0);
+        updateHUD();
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate(performance.now());
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
